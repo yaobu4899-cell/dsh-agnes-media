@@ -5,6 +5,20 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-15
+
+### Fixed
+
+- The output-name check refuses `\` on every platform. On POSIX it was an
+  ordinary name character, so `sub\dir.png` and `C:\abs.png` were accepted and
+  written as a single file whose name contains a path separator — a file that
+  becomes a directory entry once the workspace reaches a Windows host or share.
+  Windows already refused both through `basename()`; the check no longer depends
+  on the platform's separator semantics.
+- The test suite passes on Linux as well as Windows. The output-name test
+  asserted Windows separator semantics everywhere, which the CI matrix caught on
+  the first run.
+
 ## [0.3.0] - 2026-09-15
 
 ### Added

@@ -19,7 +19,7 @@
  */
 
 import { writeFile } from 'node:fs/promises'
-import { basename, join } from 'node:path'
+import { join } from 'node:path'
 
 /** Stable Loader identity. */
 export const name = 'agnes-media'
@@ -261,6 +261,10 @@ async function workspace(ctx, exec) {
  * Resolve one model-supplied file name inside the Session workspace. A name
  * carrying a directory, an absolute path, or a traversal segment is refused, so
  * the model chooses the file name but never the directory.
+ *
+ * Both separators are refused on every platform: on POSIX a backslash is an
+ * ordinary name character, and accepting it there would produce a file that
+ * becomes a directory entry once the workspace reaches a Windows host or share.
  * @param requested - the model-supplied name, when it supplied one.
  * @param fallback - the generated name used when it did not.
  * @returns a bare file name.
@@ -271,7 +275,7 @@ function outputName(requested, fallback) {
   if (typeof requested !== 'string') throw new Error('agnes-media: "name" must be a string')
   const trimmed = requested.trim()
   if (trimmed.length === 0) return fallback
-  if (trimmed !== basename(trimmed) || trimmed.includes('..')) {
+  if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('..')) {
     throw new Error(`agnes-media: "name" must be a plain file name inside the Session workspace, received "${requested}"`)
   }
   return trimmed

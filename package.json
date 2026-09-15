@@ -1,6 +1,6 @@
 {
   "name": "dsh-agnes-media",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agnes AI image and video generation tools for the DeepSeek Harness",
   "type": "module",
   "main": "index.js",

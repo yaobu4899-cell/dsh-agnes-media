@@ -196,8 +196,50 @@ describe('output name', () => {
   test('refuses a path that could escape the workspace, before any request', async () => {
     const h = mount({ handler: imageOk })
     try {
-      for (const name of ['../escape.png', 'sub/dir.png', 'sub\\dir.png', 42, 'C:/abs.png']) {
-        await assert.rejects(h.tools.get('agnes_image').execute({ prompt: 'x', name }, exec()))
+      // Portable rejections: traversal, either separator, and a non-string.
+      const refused = /plain file name|"name" must be a string/
+      for (const name of ['../escape.png', 'sub/dir.png', 'sub\\dir.png', 42]) {
+        await assert.rejects(
+          h.tools.get('agnes_image').execute({ prompt: 'x', name }, exec()),
+          refused,
+          `expected "${name}" to be refused`,
+        )
+      }
+      assert.equal(h.calls.length, 0)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('names the reason each refusal carries', async () => {
+    const h = mount({ handler: imageOk })
+    try {
+      await assert.rejects(
+        h.tools.get('agnes_image').execute({ prompt: 'x', name: 42 }, exec()),
+        /"name" must be a string/,
+      )
+      await assert.rejects(
+        h.tools.get('agnes_image').execute({ prompt: 'x', name: 'sub/dir.png' }, exec()),
+        /plain file name/,
+      )
+      assert.equal(h.calls.length, 0)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('refuses a Windows path shape on POSIX, where a backslash is a name character', async () => {
+    const h = mount({ handler: imageOk })
+    try {
+      // basename() treats "\" as a separator only on Windows, so these were
+      // accepted on POSIX, where they name one file carrying a separator that
+      // becomes a directory entry once the workspace reaches a Windows host.
+      for (const name of ['sub\\dir.png', 'C:\\abs.png']) {
+        await assert.rejects(
+          h.tools.get('agnes_image').execute({ prompt: 'x', name }, exec()),
+          /plain file name/,
+          `expected "${name}" to be refused on ${process.platform}`,
+        )
       }
       assert.equal(h.calls.length, 0)
     } finally {
