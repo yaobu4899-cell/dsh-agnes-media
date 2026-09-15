@@ -4,10 +4,10 @@
  * Registers three model-facing tools that call the Agnes AI HTTP API and write
  * the generated media into the calling Session's workspace:
  *
- * - `agnes_image` 鈥?text-to-image, saved as PNG, and additionally published as a
+ * - `agnes_image` — text-to-image, saved as PNG, and additionally published as a
  *   durable image attachment when the bytes fit the attachment admission limits.
- * - `agnes_video` 鈥?text-to-video; creates the asynchronous task and waits.
- * - `agnes_video_status` 鈥?resumes a task `agnes_video` handed back and
+ * - `agnes_video` — text-to-video; creates the asynchronous task and waits.
+ * - `agnes_video_status` — resumes a task `agnes_video` handed back and
  *   downloads the finished file.
  *
  * The package imports nothing from the harness. Tool definitions are raw JSON
@@ -212,7 +212,7 @@ async function request(url, headers, init, signal, settings, options = {}) {
       if (signal?.aborted === true) throw error
       const detail = error instanceof Error ? error.message : String(error)
       if (!retryTransport) {
-        throw new Error(`agnes-media: ${detail} 鈥?this call is not idempotent, so it is not retried; check the provider for a task it may already have created`)
+        throw new Error(`agnes-media: ${detail} — this call is not idempotent, so it is not retried; check the provider for a task it may already have created`)
       }
       lastFailure = `agnes-media: network error: ${detail}`
     }
@@ -350,7 +350,7 @@ const tag = (bytes, offset, text) =>
  *
  * The four formats the harness accepts are covered; anything else answers
  * `undefined` and the caller keeps its default. Header parsing is enough because
- * only the aspect ratio is wanted 鈥?no decoding, no image library.
+ * only the aspect ratio is wanted — no decoding, no image library.
  * @param bytes - the encoded image.
  * @returns `{ width, height }`, or `undefined` when the format is unrecognized.
  */
@@ -450,8 +450,8 @@ function nearestRatio(width, height) {
 /**
  * Resolve one model-supplied input image into what the API accepts. A public
  * URL or an existing Data URI passes through unchanged; a Session path is read
- * through the sandboxed filesystem service 鈥?so the deployment's file policy
- * still applies 鈥?and inlined as a Data URI, which the provider documents as the
+ * through the sandboxed filesystem service — so the deployment's file policy
+ * still applies — and inlined as a Data URI, which the provider documents as the
  * alternative when an image cannot be made public.
  * @param ctx - the plugin context.
  * @param settings - the resolved settings.
@@ -552,7 +552,7 @@ async function inlineImage(ctx, bytes, fileName) {
       },
     }
   } catch (error) {
-    ctx.logger.warn(`agnes-media: inline attachment skipped 鈥?${error instanceof Error ? error.message : String(error)}`)
+    ctx.logger.warn(`agnes-media: inline attachment skipped — ${error instanceof Error ? error.message : String(error)}`)
     return undefined
   }
 }
@@ -570,7 +570,7 @@ export function apply(ctx, config) {
     timeoutMs: settings.operationDeadlineMs + TOOL_TIMEOUT_MARGIN_MS,
     description: 'Generate an image from a text prompt with the Agnes image model and save it as a PNG file in the Session workspace. '
       + 'Pass `images` to transform existing pictures instead: one input is image-to-image, several compose them together. '
-      + 'Returns the absolute file path, byte size, and 鈥?when the image fits the attachment limits 鈥?the image itself. '
+      + 'Returns the absolute file path, byte size, and — when the image fits the attachment limits — the image itself. '
       + 'The provider queues requests and may answer 503 for a full queue or 429 on a free tier; this tool already retries those, so a slow call is normal.',
     parameters: {
       type: 'object',
@@ -597,6 +597,8 @@ export function apply(ctx, config) {
           path: { type: 'string' },
           bytes: { type: 'integer' },
           model: { type: 'string' },
+          apiBase: { type: 'string' },
+          endpoint: { type: 'string' },
           size: { type: 'string' },
           ratio: { type: 'string' },
           revisedPrompt: { description: 'The provider-rewritten prompt, or null when it returned none.' },
@@ -604,7 +606,13 @@ export function apply(ctx, config) {
         },
       },
       render(_args, value) {
-        const blocks = [{ type: 'text', text: `agnes_image 鈫?${value.path} (${value.bytes} bytes, ${value.size} ${value.ratio})` }]
+        const blocks = [{
+          type: 'text',
+          text: [`agnes_image -> ${value.path} (${value.bytes} bytes, ${value.size} ${value.ratio})`,
+            ...(typeof value.model === 'string' && typeof value.apiBase === 'string' && typeof value.endpoint === 'string'
+              ? [`model ${value.model} at ${value.apiBase}, POST ${value.endpoint}`]
+              : [])].join('\n'),
+        }]
         if (value.inline !== undefined) blocks.push(value.inline)
         return blocks
       },
@@ -622,8 +630,9 @@ export function apply(ctx, config) {
       const ratio = stated ?? inputRatio(inputs) ?? '3:4'
       const body = { model: settings.imageModel, prompt: args.prompt, size, ratio, return_base64: true }
       if (inputs.length > 0) body.extra_body = { image: inputs.map(input => input.uri) }
+      const endpoint = `${settings.baseURL}/images/generations`
       const parsed = await requestJson(
-        `${settings.baseURL}/images/generations`,
+        endpoint,
         { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
         { method: 'POST', body: JSON.stringify(body) },
         exec.signal,
@@ -640,6 +649,8 @@ export function apply(ctx, config) {
         path: target,
         bytes: bytes.byteLength,
         model: settings.imageModel,
+        apiBase: settings.baseURL,
+        endpoint,
         size,
         ratio,
         revisedPrompt: typeof item.revised_prompt === 'string' && item.revised_prompt.length > 0 ? item.revised_prompt : null,
@@ -655,6 +666,9 @@ export function apply(ctx, config) {
    */
   async function runVideo(job) {
     const headers = { authorization: `Bearer ${await apiKey(ctx, settings)}`, 'content-type': 'application/json' }
+    // A status call resumes a task it did not create, so it carries no body and
+    // reports the model this deployment would submit.
+    const model = job.body?.model ?? settings.videoModel
     let record
     let videoId = job.videoId
     if (videoId === undefined) {
@@ -689,14 +703,16 @@ export function apply(ctx, config) {
     }
     const progress = typeof record?.progress === 'number' ? record.progress : null
     const providerError = providerFailure(record?.error)
-    if (!DONE_STATES.has(status)) return { ok: false, videoId, status, progress, path: null, bytes: null, error: providerError }
+    const endpoint = `${settings.baseURL}/videos`
+    const apiBase = settings.baseURL
+    if (!DONE_STATES.has(status)) return { ok: false, model, apiBase, endpoint, videoId, status, progress, path: null, bytes: null, error: providerError }
     const url = findMediaUrl(record, 0)
     if (url === undefined) throw new Error('agnes-media: the task completed but its record carried no download URL')
     const bytes = await readPayload({ url }, settings.maxMediaBytes, job.signal, settings)
     if (bytes === undefined) throw new Error('agnes-media: the completed video carried no payload')
     const target = join(job.directory, job.fileName)
     await writeFile(target, bytes)
-    return { ok: true, videoId, status, progress, path: target, bytes: bytes.byteLength, error: null }
+    return { ok: true, model, apiBase, endpoint, videoId, status, progress, path: target, bytes: bytes.byteLength, error: null }
   }
 
   const videoOutput = {
@@ -705,6 +721,9 @@ export function apply(ctx, config) {
       additionalProperties: true,
       properties: {
         ok: { type: 'boolean' },
+        model: { type: 'string' },
+        apiBase: { type: 'string' },
+        endpoint: { type: 'string' },
         videoId: { type: 'string' },
         status: { type: 'string' },
         progress: { description: 'Provider progress percentage, or null when it reported none.' },
@@ -716,16 +735,24 @@ export function apply(ctx, config) {
     // The registry calls render(arguments, value): the first parameter is the
     // call's arguments and the second the validated execute result.
     render(_args, value) {
+      // Provenance is printed only when the result carries it, so a record from
+      // an older package version renders without a line of `undefined`.
+      const provenance = typeof value.model === 'string' && typeof value.apiBase === 'string' && typeof value.endpoint === 'string'
+        ? `model ${value.model} at ${value.apiBase}, POST ${value.endpoint}`
+        : undefined
       if (value.ok === true) {
         return [{
           type: 'text',
-          text: `agnes_video 鈫?${value.path} (${value.bytes} bytes)\nvideo_id ${value.videoId}, status ${value.status}`,
+          text: [`agnes_video -> ${value.path} (${value.bytes} bytes)`,
+            `video_id ${value.videoId}, status ${value.status}`,
+            ...(provenance === undefined ? [] : [provenance])].join('\n'),
         }]
       }
       const lines = [`video not finished: status ${value.status}${value.progress === null ? '' : `, progress ${value.progress}%`}`]
       if (value.error !== null) lines.push(`provider error: ${value.error}`)
       lines.push(`video_id ${value.videoId}`)
-      lines.push('Call agnes_video_status with this video_id to finish and download it.')
+      lines.push(`Call agnes_video_status with this video_id to finish and download it.`)
+      if (provenance !== undefined) lines.push(provenance)
       return [{ type: 'text', text: lines.join('\n') }]
     },
   }

@@ -565,4 +565,48 @@ describe('render', () => {
       h.restore()
     }
   })
+
+  test('every rendered result states the model and the endpoint it called', async () => {
+    const h = mount({ handler: imageOk })
+    try {
+      const image = await h.tools.get('agnes_image').execute({ prompt: 'x', name: 'a.png' }, exec())
+      assert.equal(image.model, 'agnes-image-2.5-flash')
+      assert.equal(image.apiBase, 'https://apihub.agnes-ai.com/v1')
+      assert.equal(image.endpoint, 'https://apihub.agnes-ai.com/v1/images/generations')
+      assert.match(h.tools.get('agnes_image').output.render({}, image)[0].text, /model agnes-image-2\.5-flash at https:\/\/apihub\.agnes-ai\.com\/v1, POST https:\/\/apihub\.agnes-ai\.com\/v1\/images\/generations/)
+
+      const video = h.tools.get('agnes_video')
+      const settled = video.output.render({}, {
+        ok: true, model: 'agnes-video-v2.0', apiBase: 'https://api.test/v1', endpoint: 'https://api.test/v1/videos',
+        videoId: 'video_1', status: 'completed', progress: 100, path: '/w/v.mp4', bytes: 9, error: null,
+      })
+      assert.match(settled[0].text, /model agnes-video-v2\.0 at https:\/\/api\.test\/v1, POST https:\/\/api\.test\/v1\/videos/)
+      const pending = video.output.render({}, {
+        ok: false, model: 'agnes-video-v2.0', apiBase: 'https://api.test/v1', endpoint: 'https://api.test/v1/videos',
+        videoId: 'video_1', status: 'in_progress', progress: 30, path: null, bytes: null, error: null,
+      })
+      assert.match(pending[0].text, /model agnes-video-v2\.0/)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('a result without provenance renders no undefined line', async () => {
+    const h = mount({ handler: imageOk })
+    try {
+      const image = await h.tools.get('agnes_image').execute({ prompt: 'x', name: 'a.png' }, exec())
+      const legacy = { ...image }
+      delete legacy.model
+      delete legacy.apiBase
+      delete legacy.endpoint
+      assert.doesNotMatch(h.tools.get('agnes_image').output.render({}, legacy)[0].text, /undefined/)
+      const video = h.tools.get('agnes_video')
+      assert.doesNotMatch(
+        video.output.render({}, { ok: true, videoId: 'video_1', status: 'completed', progress: 100, path: '/w/v.mp4', bytes: 9, error: null })[0].text,
+        /undefined/,
+      )
+    } finally {
+      h.restore()
+    }
+  })
 })

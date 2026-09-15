@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-15
+
+### Added
+
+- Every tool result and rendered line now states the model and the endpoint the
+  call used: `model <id> at <base>, POST <endpoint>`. `agnes_image` already
+  returned `model`; `agnes_video` and `agnes_video_status` did not, so the model
+  a video task actually used was readable only from the session log. The
+  `agnes_video_status` result reports the model this deployment would submit,
+  because a status call resumes a task it did not create and carries no request
+  body. The line is omitted when a result carries no provenance, so a record
+  written by an earlier version never renders `undefined`.
+
+### Fixed
+
+- Eleven text literals carried double-encoded mojibake from an earlier edit: ten
+  held the two characters a UTF-8 em dash becomes when its bytes are read as
+  GBK, and two held the same damage around an arrow (with one of those two
+  overlapping). Two of them sat inside model-facing strings, so the tool catalog
+  shipped a description reading `and <mojibake> when the image fits` and every
+  rendered image and video line opened with `<mojibake>`. The intended em dashes
+  and arrows are restored, with their spacing, and no non-ASCII character other
+  than the em dash and the ellipsis remains in `index.js`.
+
 ## [0.3.1] - 2026-09-15
 
 ### Fixed
