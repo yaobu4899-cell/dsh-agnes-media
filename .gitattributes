@@ -1,0 +1,19 @@
+# Normalize every text file to LF in the repository and in the working tree.
+#
+# Without this, a Windows checkout with core.autocrlf=true rewrites every line
+# ending on checkout, and any edit re-commits the whole file as changed. This
+# project is plain JavaScript and Markdown, so LF everywhere is the safe norm.
+* text=auto eol=lf
+
+# Windows-only launchers, should any ever be added here.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets are never touched.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.mp4 binary
+*.ico binary

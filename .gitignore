@@ -1,0 +1,16 @@
+# The package has no dependencies, so this should never appear.
+node_modules/
+
+# Test and tooling residue.
+coverage/
+*.tsbuildinfo
+*.log
+npm-debug.log*
+
+# Editor and OS noise.
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

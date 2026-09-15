@@ -1,0 +1,38 @@
+{
+  "name": "dsh-agnes-media",
+  "version": "0.3.0",
+  "description": "Agnes AI image and video generation tools for the DeepSeek Harness",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yaobu4899-cell/dsh-agnes-media.git"
+  },
+  "homepage": "https://github.com/yaobu4899-cell/dsh-agnes-media#readme",
+  "bugs": {
+    "url": "https://github.com/yaobu4899-cell/dsh-agnes-media/issues"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "agnes",
+    "image-generation",
+    "video-generation"
+  ],
+  "license": "MIT"
+}
