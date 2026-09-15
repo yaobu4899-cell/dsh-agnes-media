@@ -138,6 +138,38 @@ function readConfig(config) {
 }
 
 /**
+ * The identifier a status query must carry, given the one a task returned.
+ *
+ * The provider answers task creation with two forms. Either it returns the bare
+ * `video_<hex>` id, or it returns a LiteLLM routing key: `video_` followed by
+ * the base64 of `litellm:custom_llm_provider:<p>;model_id:<m>;video_id:<bare>`.
+ * A status query addressed with the routing key answers `HTTP 404 task not
+ * found`, because the provider resolves the bare id, which is the only part of
+ * the key it issued. Both forms therefore resolve to the bare id here, and the
+ * routing key stays intact for display and for the caller's next call.
+ *
+ * A key with no decodable `video_id` is returned unchanged: an unrecognized id
+ * must reach the provider and produce its own error rather than be rewritten
+ * into a guess.
+ * @param id - the id a creation response carried, or one a caller supplied.
+ * @returns the bare provider id, or the input when it carries none.
+ */
+function bareVideoId(id) {
+  if (typeof id !== 'string' || !id.startsWith('video_')) return id
+  let decoded
+  try {
+    decoded = Buffer.from(id.slice('video_'.length), 'base64').toString('utf8')
+  } catch {
+    return id
+  }
+  if (!decoded.startsWith('litellm:')) return id
+  const part = decoded.split(';').find(entry => entry.startsWith('video_id:'))
+  if (part === undefined) return id
+  const bare = part.slice('video_id:'.length)
+  return bare.length === 0 ? id : bare
+}
+
+/**
  * Resolve the configured credential reference for one operation. Resolution is
  * per call, so a key changed in the Models page reaches the next request without
  * a restart.
@@ -693,7 +725,7 @@ export function apply(ctx, config) {
       await new Promise(resolve => setTimeout(resolve, settings.pollIntervalMs))
       job.signal?.throwIfAborted()
       record = await requestJson(
-        `${settings.videoStatusURL}?video_id=${encodeURIComponent(videoId)}`,
+        `${settings.videoStatusURL}?video_id=${encodeURIComponent(bareVideoId(videoId))}`,
         headers,
         { method: 'GET' },
         job.signal,
@@ -763,6 +795,7 @@ export function apply(ctx, config) {
     description: 'Generate a video from a text prompt with the Agnes video model and save it as an MP4 file in the Session workspace. '
       + 'Pass `images` to animate existing pictures instead: one input is image-to-video, several drive a keyframe transition when `mode` is "keyframes". '
       + 'Video generation is asynchronous: this tool creates the task and waits, and when the task is still rendering it returns the video_id for agnes_video_status to finish. '
+      + 'A still-rendering task must be collected promptly with agnes_video_status: the provider stops resolving old task ids, so an id is not a durable handle. '
       + 'The provider allows about one video request per minute and answers 429 beyond that; this tool retries with backoff but a free-tier rate limit can still surface.',
     parameters: {
       type: 'object',
@@ -826,7 +859,8 @@ export function apply(ctx, config) {
     name: 'agnes_video_status',
     timeoutMs: MAX_WAIT_SECONDS * 1000 + settings.operationDeadlineMs + TOOL_TIMEOUT_MARGIN_MS,
     description: 'Check an Agnes video task created by agnes_video and, once it has finished, download it into the Session workspace as an MP4. '
-      + 'Call this with the video_id that agnes_video returned while the task was still rendering.',
+      + 'Call this with the video_id that agnes_video returned while the task was still rendering. '
+      + 'Call it promptly: the provider stops resolving old task ids, so a task that waited too long answers 404 and has to be rendered again.',
     parameters: {
       type: 'object',
       additionalProperties: false,

@@ -455,6 +455,75 @@ describe('agnes_video', () => {
       h.restore()
     }
   })
+
+  test('a LiteLLM routing key resolves to the bare id the provider issued', async () => {
+    // The provider answers task creation with `video_` plus the base64 of a
+    // LiteLLM routing key. A status query carrying that whole key answers 404
+    // task not found, so polling must address the inner video_id.
+    const bare = 'video_a9b61f5f44b64e31b9abe76ecfb5cd6a'
+    const routingKey = `video_${Buffer.from(`litellm:custom_llm_provider:openai;model_id:agnes-video-v2.0;video_id:${bare}`).toString('base64')}`
+    const h = mount({
+      config: { pollIntervalMs: 1 },
+      handler: (url) => {
+        if (url.endsWith('/videos')) return json({ video_id: routingKey, status: 'queued' })
+        if (url.includes('/agnesapi')) {
+          assert.match(url, new RegExp(`video_id=${bare}$`), 'polling must carry the bare id')
+          assert.doesNotMatch(url, /litellm|bGl0ZWxsbT/, 'polling must not carry the routing key')
+          return json({ video_id: bare, status: 'in_progress', progress: 30 })
+        }
+        return json({})
+      },
+    })
+    try {
+      const value = await h.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0.05 }, exec())
+      assert.equal(value.ok, false)
+      assert.equal(value.status, 'in_progress')
+      // The caller gets back exactly what the provider returned, so the same id
+      // can be passed to agnes_video_status.
+      assert.equal(value.videoId, routingKey)
+      assert.equal(h.calls.filter(call => call.url.includes('/agnesapi')).length > 0, true)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('a status call unwraps a routing key the caller passes back', async () => {
+    const bare = 'video_cw269d676b6d24e1aa7811610ea57609a41b'
+    const routingKey = `video_${Buffer.from(`litellm:custom_llm_provider:openai;model_id:agnes-video-v2.0;video_id:${bare}`).toString('base64')}`
+    const h = mount({
+      config: { pollIntervalMs: 1 },
+      handler: (url) => {
+        if (url.includes('/agnesapi')) {
+          assert.match(url, new RegExp(`video_id=${bare}$`))
+          return json({ video_id: bare, status: 'completed', progress: 100, url: 'https://cdn.test/v.mp4' })
+        }
+        return binary(Buffer.from('UNWRAPPED'))
+      },
+    })
+    try {
+      const value = await h.tools.get('agnes_video_status').execute({ videoId: routingKey, name: 'v.mp4' }, exec())
+      assert.equal(value.ok, true)
+      assert.equal(readFileSync(value.path).toString(), 'UNWRAPPED')
+      assert.equal(value.videoId, routingKey)
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('an id that is already bare passes through untouched', async () => {
+    const h = mount({
+      config: { pollIntervalMs: 1 },
+      handler: (url) => url.includes('/agnesapi')
+        ? json({ video_id: 'video_plain', status: 'completed', progress: 100, url: 'https://cdn.test/p.mp4' })
+        : binary(Buffer.from('PLAIN')),
+    })
+    try {
+      await h.tools.get('agnes_video_status').execute({ videoId: 'video_plain', name: 'v.mp4' }, exec())
+      assert.match(h.calls[0].url, /video_id=video_plain$/)
+    } finally {
+      h.restore()
+    }
+  })
 })
 
 // ── retry policy ────────────────────────────────────────────────────────────

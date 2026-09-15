@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-09-15
+
+### Fixed
+
+- A video task is polled with the id the provider resolves. A deployment fronted
+  by a LiteLLM proxy answers task creation with a routing key — `video_` plus
+  the base64 of `litellm:custom_llm_provider:<p>;model_id:<m>;video_id:<bare>` —
+  and asking `GET /agnesapi?video_id=<routing key>` answers
+  `HTTP 404 task not found`, because the provider issued only the bare id inside
+  it. Measured against the live service: the same task that answers 404 for the
+  routing key answers 200 with its `url` for the bare `video_id`. Every poll now
+  unwraps the key, while the result keeps returning the key the provider sent, so
+  a caller can pass it straight back to `agnes_video_status`. An id that carries
+  no decodable `video_id` reaches the provider unchanged rather than being
+  rewritten into a guess.
+
+### Changed
+
+- The video tools state that a settled task must be collected promptly. A
+  completed record carries its MP4 at the top-level `url`, and the provider's
+  documented fields include `expires_at`; the vendor documentation states no
+  retention window, and in measurement two of five tasks created in one session
+  had stopped resolving while three others still answered.
+
 ## [0.4.0] - 2026-09-15
 
 ### Added
