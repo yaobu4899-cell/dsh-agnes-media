@@ -551,6 +551,148 @@ describe('agnes_video', () => {
   })
 })
 
+// ── the 2.5 video family ────────────────────────────────────────────────────
+
+describe('agnes_video on the 2.5 family', () => {
+  const t25 = { videoModel: 'agnes-video-2.5-flash', pollIntervalMs: 1 }
+  const queued = () => json({ video_id: 'task_abc', status: 'queued' })
+
+  test('text-to-video carries the 2.5 fields and none of the v2.0 ones', async () => {
+    // The live service answers `HTTP 400: width is a forbidden field` for each
+    // v2.0 field it is sent, so their absence is the behaviour under test.
+    const h = mount({ config: t25, handler: queued })
+    try {
+      await h.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0, seconds: 6 }, exec())
+      const body = h.calls[0].body
+      assert.equal(body.model, 'agnes-video-2.5-flash')
+      assert.equal(body.mode, 'text')
+      assert.equal(body.size, '720P')
+      assert.equal(body.seconds, '6')
+      assert.equal(body.aspect_ratio, '16:9')
+      for (const forbidden of ['width', 'height', 'num_frames', 'frame_rate']) {
+        assert.equal(body[forbidden], undefined, `${forbidden} must not ride the 2.5 family`)
+      }
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('the duration is a clamped string, derived from frames when unstated', async () => {
+    const h = mount({ config: t25, handler: queued })
+    try {
+      await h.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0, seconds: 60 }, exec())
+      assert.equal(h.calls[0].body.seconds, '12', 'the 2.5 family caps a render at 12 seconds')
+    } finally {
+      h.restore()
+    }
+    const derived = mount({ config: t25, handler: queued })
+    try {
+      await derived.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0, frames: 241, frameRate: 24 }, exec())
+      assert.equal(derived.calls[0].body.seconds, '10', '241 frames at 24fps is about 10 seconds')
+    } finally {
+      derived.restore()
+    }
+  })
+
+  test('public URLs become a keyframe pair or a reference set', async () => {
+    const pair = mount({ config: t25, handler: queued })
+    try {
+      await pair.tools.get('agnes_video').execute(
+        { prompt: 'x', waitSeconds: 0, images: ['https://cdn.test/a.png', 'https://cdn.test/b.png'] },
+        exec(),
+      )
+      const body = pair.calls[0].body
+      assert.equal(body.mode, 'keyframe')
+      assert.equal(body.first_frame, 'https://cdn.test/a.png')
+      assert.equal(body.last_frame, 'https://cdn.test/b.png')
+      assert.equal(body.images, undefined)
+    } finally {
+      pair.restore()
+    }
+    const many = mount({ config: t25, handler: queued })
+    try {
+      await many.tools.get('agnes_video').execute(
+        {
+          prompt: 'x',
+          waitSeconds: 0,
+          images: ['https://cdn.test/1.png', 'https://cdn.test/2.png', 'https://cdn.test/3.png'],
+        },
+        exec(),
+      )
+      const body = many.calls[0].body
+      assert.equal(body.mode, 'reference')
+      assert.equal(body.images.length, 3)
+      assert.equal(body.first_frame, undefined)
+    } finally {
+      many.restore()
+    }
+  })
+
+  test('a local file is refused by name, before any request', async () => {
+    // The family answers 400 for a Data URI, so the refusal has to happen here
+    // and has to say which model cannot take the file and what can.
+    const h = mount({ config: t25, files: { 'a.png': png(800, 800) }, handler: queued })
+    try {
+      await assert.rejects(
+        h.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0, images: ['a.png'] }, exec()),
+        /public URLs.*agnes-video-v2\.0/s,
+      )
+      assert.equal(h.calls.length, 0, 'the refusal must precede the request')
+    } finally {
+      h.restore()
+    }
+  })
+
+  test('an explicit aspect ratio wins over the pixel dimensions', async () => {
+    const h = mount({ config: t25, handler: queued })
+    try {
+      await h.tools.get('agnes_video').execute(
+        { prompt: 'x', waitSeconds: 0, width: 1920, height: 1080, aspectRatio: '9:16' },
+        exec(),
+      )
+      assert.equal(h.calls[0].body.aspect_ratio, '9:16')
+    } finally {
+      h.restore()
+    }
+    const derived = mount({ config: t25, handler: queued })
+    try {
+      await derived.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0, width: 1080, height: 1920 }, exec())
+      assert.equal(derived.calls[0].body.aspect_ratio, '9:16', 'a portrait pair selects the portrait ratio')
+    } finally {
+      derived.restore()
+    }
+  })
+
+  test('polling addresses the task with model_name, and v2.0 does not', async () => {
+    const handler = (url) => url.endsWith('/videos')
+      ? json({ video_id: 'task_abc', status: 'queued' })
+      : json({ video_id: 'task_abc', status: 'in_progress', progress: 30 })
+    const five = mount({ config: t25, handler })
+    try {
+      await five.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0.2 }, exec())
+      const polled = five.calls.filter(call => call.url.includes('/agnesapi'))
+      assert.ok(polled.length > 0, 'the call should have polled')
+      assert.match(polled[0].url, /model_name=agnes-video-2\.5-flash/)
+    } finally {
+      five.restore()
+    }
+    const twenty = mount({
+      config: { pollIntervalMs: 1 },
+      handler: (url) => url.endsWith('/videos')
+        ? json({ video_id: 'video_1', status: 'queued' })
+        : json({ video_id: 'video_1', status: 'in_progress', progress: 30 }),
+    })
+    try {
+      await twenty.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 0.2 }, exec())
+      const polled = twenty.calls.filter(call => call.url.includes('/agnesapi'))
+      assert.ok(polled.length > 0)
+      assert.doesNotMatch(polled[0].url, /model_name/, 'v2.0 takes no model_name')
+    } finally {
+      twenty.restore()
+    }
+  })
+})
+
 // ── retry policy ────────────────────────────────────────────────────────────
 
 describe('retry policy', () => {

@@ -183,6 +183,137 @@ function bareVideoId(id) {
 }
 
 /**
+ * Whether one model id belongs to the 2.5 video family, whose request contract
+ * differs from v2.0 field by field.
+ *
+ * Measured against the live service: a v2.0-shaped body sent to
+ * `agnes-video-2.5-flash` answers `HTTP 400: width is a forbidden field`, then
+ * the same for `height` and `num_frames`. The 2.5 family takes a `seconds`
+ * string, a `size` of `"720P"`, and an `aspect_ratio`; it requires `mode`; and it
+ * addresses frame images by public URL only — a Data URI answers 400, so a local
+ * file cannot ride this family the way it rides v2.0.
+ * @param model - the configured or requested video model id.
+ * @returns whether the id names the 2.5 family.
+ */
+function isVideo25(model) {
+  return typeof model === 'string' && /^agnes-video-2\.5/.test(model)
+}
+
+/** Aspect ratios the 2.5 family documents, with the width/height value each names. */
+const ASPECT_RATIOS_25 = [
+  { ratio: '21:9', value: 21 / 9 },
+  { ratio: '16:9', value: 16 / 9 },
+  { ratio: '4:3', value: 4 / 3 },
+  { ratio: '1:1', value: 1 },
+  { ratio: '3:4', value: 3 / 4 },
+  { ratio: '9:16', value: 9 / 16 },
+]
+
+/** Widest aspect ratio the 2.5 family documents, used when a caller states none. */
+const DEFAULT_ASPECT_RATIO_25 = '16:9'
+
+/** Shortest and longest render the 2.5 family accepts, in seconds. */
+const MIN_SECONDS_25 = 4
+const MAX_SECONDS_25 = 12
+
+/**
+ * Nearest documented 2.5 aspect ratio for one width/height pair.
+ * @param width - requested width in pixels.
+ * @param height - requested height in pixels.
+ * @returns the documented ratio string.
+ */
+function aspectRatioFor(width, height) {
+  if (!(width > 0) || !(height > 0)) return DEFAULT_ASPECT_RATIO_25
+  const wanted = width / height
+  let best = ASPECT_RATIOS_25[1]
+  for (const entry of ASPECT_RATIOS_25) {
+    if (Math.abs(entry.value - wanted) < Math.abs(best.value - wanted)) best = entry
+  }
+  return best.ratio
+}
+
+/**
+ * Frame count for one duration at one frame rate, snapped to the provider's
+ * `8n+1` rule and capped at {@link MAX_FRAMES}.
+ * @param seconds - the requested duration in seconds.
+ * @param frameRate - the requested frame rate.
+ * @returns a frame count the v2.0 family accepts.
+ */
+function framesForSeconds(seconds, frameRate) {
+  const wanted = Math.max(1, Math.round(seconds * frameRate))
+  const stepped = Math.round((wanted - 1) / 8) * 8 + 1
+  return Math.min(Math.max(stepped, 1), MAX_FRAMES)
+}
+
+/**
+ * Duration a 2.5 request should state, clamped to the documented range.
+ * @param seconds - the requested duration, when the caller stated one.
+ * @param frames - the frame count the call resolved to.
+ * @param frameRate - the frame rate the call resolved to.
+ * @returns the duration as the string the service expects.
+ */
+function secondsFor25(seconds, frames, frameRate) {
+  const wanted = seconds === undefined ? frames / frameRate : seconds
+  const clamped = Math.min(Math.max(wanted, MIN_SECONDS_25), MAX_SECONDS_25)
+  return String(Math.round(clamped))
+}
+
+/**
+ * Build the request body for the 2.5 video family.
+ *
+ * The family takes frame images as public URLs and refuses a Data URI, so a
+ * Session file is refused here by name rather than sent as one and answered with
+ * a bare 400. Mode follows the inputs the way the vendor documents them: no
+ * image is `text`, one or two frames are `keyframe`, and three or more are
+ * `reference`.
+ * @param model - the resolved video model id.
+ * @param args - the call's arguments.
+ * @param resolved - the resolved input images, in the order given.
+ * @returns the request body.
+ * @throws when an input is a local file, which this family cannot address.
+ */
+function videoBody25(model, args, resolved) {
+  const width = args.width ?? 1152
+  const height = args.height ?? 768
+  const frameRate = args.frameRate ?? 24
+  const frames = args.frames ?? 121
+  const local = resolved.filter(input => input.uri.startsWith('data:'))
+  if (local.length > 0) {
+    throw new Error(
+      `agnes-media: "${model}" takes frame images as public URLs and answers 400 for a Data URI, `
+      + `so ${local.length} local input file(s) cannot ride it. Pass public URLs, or set the row's `
+      + 'videoModel to agnes-video-v2.0, which accepts local files.',
+    )
+  }
+  const uris = resolved.map(input => input.uri)
+  const stated = typeof args.aspectRatio === 'string' && args.aspectRatio.length > 0
+  // The family's own default is 16:9. Deriving from the v2.0 defaults would
+  // otherwise turn an unstated shape into 4:3, because 1152x768 is 3:2 and the
+  // nearer documented ratio to 3:2 is 4:3.
+  const unstated = args.width === undefined && args.height === undefined
+  const body = {
+    model,
+    prompt: args.prompt,
+    seconds: secondsFor25(args.seconds, frames, frameRate),
+    size: '720P',
+    aspect_ratio: stated ? args.aspectRatio : unstated ? DEFAULT_ASPECT_RATIO_25 : aspectRatioFor(width, height),
+  }
+  if (uris.length === 0) {
+    body.mode = 'text'
+  } else if (uris.length <= 2) {
+    body.mode = 'keyframe'
+    body.first_frame = uris[0]
+    if (uris.length === 2) body.last_frame = uris[1]
+  } else {
+    // The family caps references at five images and refuses `videos`.
+    body.mode = 'reference'
+    body.images = uris.slice(0, 5)
+  }
+  if (args.seed !== undefined) body.seed = args.seed
+  return body
+}
+
+/**
  * Resolve the configured credential reference for one operation. Resolution is
  * per call, so a key changed in the Models page reaches the next request without
  * a restart.
@@ -734,11 +865,15 @@ export function apply(ctx, config) {
     }
     let status = typeof record?.status === 'string' ? record.status : 'queued'
     const deadline = Date.now() + job.waitMs
+    // The 2.5 family documents `model_name` as required for every mode but
+    // `text`, and accepting it for `text` too, so one query serves both.
+    const statusQuery = `video_id=${encodeURIComponent(bareVideoId(videoId))}`
+      + (isVideo25(model) ? `&model_name=${encodeURIComponent(model)}` : '')
     while (!DONE_STATES.has(status) && !FAILED_STATES.has(status) && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, settings.pollIntervalMs))
       job.signal?.throwIfAborted()
       record = await requestJson(
-        `${settings.videoStatusURL}?video_id=${encodeURIComponent(bareVideoId(videoId))}`,
+        `${settings.videoStatusURL}?${statusQuery}`,
         headers,
         { method: 'GET' },
         job.signal,
@@ -819,13 +954,17 @@ export function apply(ctx, config) {
           type: 'array',
           items: { type: 'string' },
           description: 'Input images for image-to-video or keyframe animation: Session file paths (absolute, or relative to the workspace) or public URLs. '
-            + 'One entry animates that image; several drive a keyframe transition. Omit entirely for text-to-video.',
+            + 'One entry animates that image; several drive a keyframe transition. Omit entirely for text-to-video. '
+            + 'On the agnes-video-2.5 family a local file is refused: that family accepts frame images as public URLs only.',
         },
-        mode: { type: 'string', description: 'Generation mode. Send "keyframes" for a transition across several input images; omit for the default text-to-video or single-image behaviour.' },
-        width: { type: 'integer', description: 'Frame width in pixels. Default 1152. The service normalizes to its nearest standard tier.' },
-        height: { type: 'integer', description: 'Frame height in pixels. Default 768. The service normalizes to its nearest standard tier.' },
-        frames: { type: 'integer', description: 'Frame count; must be 8n+1 and at most 441. 121 at 24fps is about 5 seconds. Default 121.' },
+        mode: { type: 'string', description: `Generation mode. Send "keyframes" for a transition across several input images; omit for the default text-to-video or single-image behaviour. The 2.5 family derives its own mode from the inputs, so this applies to agnes-video-v2.0.` },
+        seconds: { type: 'number', description: `Render duration in seconds. The 2.5 family takes it as its own field and clamps to ${MIN_SECONDS_25}-${MAX_SECONDS_25}; on agnes-video-v2.0 it converts to frames at frameRate. Omit to keep the family's own default.` },
+        width: { type: 'integer', description: 'Frame width in pixels. Default 1152. The service normalizes to its nearest standard tier. On the 2.5 family this only selects the nearest documented aspect ratio.' },
+        height: { type: 'integer', description: 'Frame height in pixels. Default 768. The service normalizes to its nearest standard tier. On the 2.5 family this only selects the nearest documented aspect ratio.' },
+        aspectRatio: { type: 'string', description: `Aspect ratio for the 2.5 family, one of ${ASPECT_RATIOS_25.map(entry => entry.ratio).join(', ')}; it wins over width and height. Ignored by agnes-video-v2.0, which sizes by width and height.` },
+        frames: { type: 'integer', description: 'Frame count; must be 8n+1 and at most 441. 121 at 24fps is about 5 seconds. Default 121. The 2.5 family derives its duration from this and frameRate when seconds is omitted.' },
         frameRate: { type: 'number', description: 'Frames per second, 1-60. Default 24.' },
+        seed: { type: 'integer', description: 'Random seed for a reproducible render. The 2.5 family accepts it; agnes-video-v2.0 ignores it.' },
         waitSeconds: { type: 'integer', description: `How long to wait for the render inside this call, up to ${MAX_WAIT_SECONDS}. Default ${DEFAULT_WAIT_SECONDS}, so one call usually outlasts the render; pass a smaller value for a quick look, and collect a still-rendering task promptly with agnes_video_status.` },
         name: { type: 'string', description: "Output file name ending in .mp4. Default 'agnes-video-<timestamp>.mp4'." },
       },
@@ -833,29 +972,39 @@ export function apply(ctx, config) {
     },
     output: videoOutput,
     async execute(args, exec) {
-      const frames = args.frames ?? 121
-      if (!Number.isInteger(frames) || frames < 1 || frames > MAX_FRAMES || (frames - 1) % 8 !== 0) {
+      const model = settings.videoModel
+      const frameRate = args.frameRate ?? 24
+      // `seconds` is the 2.5 family's duration field. The v2.0 family states a
+      // duration as frames at a frame rate, so a stated duration converts into
+      // the 8n+1 frame count it accepts.
+      const frames = args.seconds === undefined ? args.frames ?? 121 : framesForSeconds(args.seconds, frameRate)
+      if (!isVideo25(model) && (!Number.isInteger(frames) || frames < 1 || frames > MAX_FRAMES || (frames - 1) % 8 !== 0)) {
         throw new Error(`agnes-media: "frames" must be 8n+1 and at most ${MAX_FRAMES}, such as 81, 121, 161, 241 or 441`)
       }
       const waitSeconds = args.waitSeconds === undefined ? DEFAULT_WAIT_SECONDS : Math.min(args.waitSeconds, MAX_WAIT_SECONDS)
       const directory = await workspace(ctx, exec)
       const inputs = Array.isArray(args.images) ? args.images : []
       const resolved = await inputImages(ctx, settings, inputs, directory, exec.signal)
-      const mode = typeof args.mode === 'string' && args.mode.length > 0 ? args.mode : undefined
-      const body = {
-        model: settings.videoModel,
-        prompt: args.prompt,
-        width: args.width ?? 1152,
-        height: args.height ?? 768,
-        num_frames: frames,
-        frame_rate: args.frameRate ?? 24,
-      }
-      if (resolved.length === 1 && mode === undefined) {
-        // One image and no explicit mode is the documented image-to-video shape;
-        // several images, or any explicit mode, travel as extra_body.
-        body.image = resolved[0].uri
-      } else if (resolved.length > 0) {
-        body.extra_body = { image: resolved.map(input => input.uri), ...(mode === undefined ? {} : { mode }) }
+      let body
+      if (isVideo25(model)) {
+        body = videoBody25(model, { ...args, frames, frameRate }, resolved)
+      } else {
+        const mode = typeof args.mode === 'string' && args.mode.length > 0 ? args.mode : undefined
+        body = {
+          model,
+          prompt: args.prompt,
+          width: args.width ?? 1152,
+          height: args.height ?? 768,
+          num_frames: frames,
+          frame_rate: frameRate,
+        }
+        if (resolved.length === 1 && mode === undefined) {
+          // One image and no explicit mode is the documented image-to-video shape;
+          // several images, or any explicit mode, travel as extra_body.
+          body.image = resolved[0].uri
+        } else if (resolved.length > 0) {
+          body.extra_body = { image: resolved.map(input => input.uri), ...(mode === undefined ? {} : { mode }) }
+        }
       }
       return runVideo({
         videoId: undefined,

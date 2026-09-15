@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-15
+
+### Added
+
+- The video tools speak both Agnes video contracts. `agnes_video` detects the
+  2.5 family from the configured model id and builds that family's request —
+  `mode`, `seconds` as a string, `size: "720P"`, and an `aspect_ratio` — instead
+  of the v2.0 one. New optional arguments: `seconds`, `aspectRatio`, and `seed`.
+  Polling adds `model_name=<model>` for the 2.5 family, which its documentation
+  requires for every mode but `text` and accepts for `text` too.
+
+### Fixed
+
+- `agnes_video` no longer sends v2.0 fields to a 2.5 model. Measured against the
+  live service, `agnes-video-2.5-flash` answers `HTTP 400: width is a forbidden
+  field`, then the same for `height` and `num_frames`, so pinning the plan's
+  listed video model made every render fail. Both contracts are now verified end
+  to end against the live service: 2.5-flash text-to-video completed in 120 s for
+  a 493,535-byte MP4, and v2.0 image-to-video from a local file completed in
+  103 s for a 559,820-byte MP4.
+
+### Changed
+
+- The 2.5 family refuses a local input file by name and before any request,
+  because that family answers 400 for the Data URI a Session file becomes. The
+  refusal names the model, the limitation, and `agnes-video-v2.0` as the family
+  that accepts local files.
+- A duration stated as `seconds` now converts to the `8n+1` frame count the v2.0
+  family expects, so one argument states duration on either family.
+
 ## [0.4.2] - 2026-09-15
 
 ### Changed

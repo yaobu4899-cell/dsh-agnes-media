@@ -136,6 +136,17 @@ than at the first model call.
   again. Pass a smaller `waitSeconds` for a quick look rather than as the default.
 - **Frame counts.** `frames` must be `8n+1` and at most 441, which the tool
   validates before creating a task.
+- **Two video families, two request contracts.** `agnes_video` reads the
+  configured `videoModel` and speaks the matching contract. `agnes-video-v2.0`
+  takes `width`/`height`/`num_frames`/`frame_rate` and accepts a frame image as a
+  Data URI, which is how a Session file rides it. The `agnes-video-2.5` family
+  takes `mode`, `seconds` (a string, 4–12), `size: "720P"`, and `aspect_ratio`,
+  and refuses `width`, `height`, and `num_frames` outright. It also takes frame
+  images as publicly accessible URLs only — a Data URI answers `HTTP 400` — so
+  the tool refuses a local input file for that family by name, before any
+  request, and points at `agnes-video-v2.0`. Set `videoModel` to the family your
+  inputs need; `seconds` and `aspectRatio` apply to the 2.5 family, and `seconds`
+  converts to frames on v2.0.
 
 ## Tests
 
