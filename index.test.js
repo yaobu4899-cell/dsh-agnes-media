@@ -524,6 +524,31 @@ describe('agnes_video', () => {
       h.restore()
     }
   })
+
+  test('a wait budget bounds the call, and the default sits at the ceiling', async () => {
+    // Waiting the 540 second default is not a unit test; the call is bounded by
+    // the requested budget, and the registered schema carries the default.
+    const h = mount({
+      config: { pollIntervalMs: 1 },
+      handler: (url) => url.endsWith('/videos')
+        ? json({ video_id: 'video_slow', status: 'queued' })
+        : json({ video_id: 'video_slow', status: 'in_progress', progress: 30 }),
+    })
+    try {
+      const started = Date.now()
+      const value = await h.tools.get('agnes_video').execute({ prompt: 'x', waitSeconds: 1, name: 'v.mp4' }, exec())
+      const waited = Date.now() - started
+      assert.equal(value.ok, false)
+      assert.equal(value.status, 'in_progress')
+      assert.ok(waited >= 950, `expected a one second budget to be honoured, waited ${waited}ms`)
+      assert.ok(h.calls.filter(call => call.url.includes('/agnesapi')).length >= 3)
+      const description = h.tools.get('agnes_video').parameters.properties.waitSeconds.description
+      assert.match(description, /Default 540/, 'the schema must state the ceiling default')
+      assert.match(h.tools.get('agnes_video_status').parameters.properties.waitSeconds.description, /Default 540/)
+    } finally {
+      h.restore()
+    }
+  })
 })
 
 // ── retry policy ────────────────────────────────────────────────────────────

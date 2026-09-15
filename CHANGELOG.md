@@ -5,6 +5,30 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-09-15
+
+### Changed
+
+- `waitSeconds` defaults to 540 in both video tools, up from 240 in `agnes_video`
+  and 120 in `agnes_video_status`. One creation call now usually outlasts the
+  render, which keeps the common case inside the call that started the task. A
+  task still rendering at the deadline has to be collected later, and a provider
+  record does not stay resolvable: the vendor documentation states no retention
+  window, and in measurement two of five tasks created in one session had stopped
+  answering while three others still did. A task whose record is gone answers
+  `HTTP 404 task not found` and has to be rendered again, so a second round trip
+  is the expensive outcome this default avoids. Callers wanting a quick look pass
+  a smaller `waitSeconds`; the schema states the new default.
+
+### Fixed
+
+- The `v0.4.1` note below claimed a LiteLLM routing key cannot be used to poll.
+  Measurement does not support that: for a record the provider still holds, the
+  routing key and the bare `video_id` both answer `HTTP 200` with the same `url`.
+  The unwrapping stands, because the bare id is the form the provider issued and
+  the vendor documents, but it is not what causes a 404. A 404 means the provider
+  no longer holds that task record; both id forms answer it together.
+
 ## [0.4.1] - 2026-09-15
 
 ### Fixed

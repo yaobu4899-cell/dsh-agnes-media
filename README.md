@@ -126,6 +126,14 @@ than at the first model call.
   call's wait budget runs out, at which point the `video_id` comes back for
   `agnes_video_status`. A failed task reports the provider's own message rather
   than stringifying its error object.
+- **Collect a render in the call that started it.** `waitSeconds` defaults to 540,
+  the ceiling, so one `agnes_video` call usually outlasts the render. A task that
+  is still rendering when the call gives up has to be collected later, and a
+  provider record does not stay resolvable: the vendor documentation states no
+  retention window, and in measurement two of five tasks created in one session
+  had stopped answering while three others still did. A task whose record is gone
+  answers `HTTP 404 task not found` from either id form and has to be rendered
+  again. Pass a smaller `waitSeconds` for a quick look rather than as the default.
 - **Frame counts.** `frames` must be `8n+1` and at most 441, which the tool
   validates before creating a task.
 

@@ -47,6 +47,19 @@ const MAX_FRAMES = 441
 const MAX_WAIT_SECONDS = 540
 
 /**
+ * Render wait an omitted `waitSeconds` gets, in seconds.
+ *
+ * A task that is still rendering when the call gives up comes back as an id for
+ * `agnes_video_status`, and a provider record does not stay resolvable: measured
+ * against the live service, tasks created minutes apart had stopped answering
+ * while others still did. A long first wait therefore keeps the common case
+ * inside the one call that created the task, which is why the default sits at the
+ * ceiling rather than at a friendlier short poll. A caller that wants a quick
+ * look passes a smaller `waitSeconds`.
+ */
+const DEFAULT_WAIT_SECONDS = MAX_WAIT_SECONDS
+
+/**
  * Slack between this plugin's own HTTP deadline and the deadline it declares to
  * the tool registry, so the plugin's descriptive error wins over the guard's
  * generic one whenever its budget is the binding constraint.
@@ -813,7 +826,7 @@ export function apply(ctx, config) {
         height: { type: 'integer', description: 'Frame height in pixels. Default 768. The service normalizes to its nearest standard tier.' },
         frames: { type: 'integer', description: 'Frame count; must be 8n+1 and at most 441. 121 at 24fps is about 5 seconds. Default 121.' },
         frameRate: { type: 'number', description: 'Frames per second, 1-60. Default 24.' },
-        waitSeconds: { type: 'integer', description: 'How long to wait for the render inside this call, up to 540. Default 240.' },
+        waitSeconds: { type: 'integer', description: `How long to wait for the render inside this call, up to ${MAX_WAIT_SECONDS}. Default ${DEFAULT_WAIT_SECONDS}, so one call usually outlasts the render; pass a smaller value for a quick look, and collect a still-rendering task promptly with agnes_video_status.` },
         name: { type: 'string', description: "Output file name ending in .mp4. Default 'agnes-video-<timestamp>.mp4'." },
       },
       required: ['prompt'],
@@ -824,7 +837,7 @@ export function apply(ctx, config) {
       if (!Number.isInteger(frames) || frames < 1 || frames > MAX_FRAMES || (frames - 1) % 8 !== 0) {
         throw new Error(`agnes-media: "frames" must be 8n+1 and at most ${MAX_FRAMES}, such as 81, 121, 161, 241 or 441`)
       }
-      const waitSeconds = args.waitSeconds === undefined ? 240 : Math.min(args.waitSeconds, MAX_WAIT_SECONDS)
+      const waitSeconds = args.waitSeconds === undefined ? DEFAULT_WAIT_SECONDS : Math.min(args.waitSeconds, MAX_WAIT_SECONDS)
       const directory = await workspace(ctx, exec)
       const inputs = Array.isArray(args.images) ? args.images : []
       const resolved = await inputImages(ctx, settings, inputs, directory, exec.signal)
@@ -866,14 +879,14 @@ export function apply(ctx, config) {
       additionalProperties: false,
       properties: {
         videoId: { type: 'string', description: 'The video_id returned by agnes_video.' },
-        waitSeconds: { type: 'integer', description: 'How long to keep polling inside this call, up to 540. Default 120.' },
+        waitSeconds: { type: 'integer', description: `How long to keep polling inside this call, up to ${MAX_WAIT_SECONDS}. Default ${DEFAULT_WAIT_SECONDS}; pass a smaller value for a quick look.` },
         name: { type: 'string', description: "Output file name ending in .mp4. Default 'agnes-video-<timestamp>.mp4'." },
       },
       required: ['videoId'],
     },
     output: videoOutput,
     async execute(args, exec) {
-      const waitSeconds = args.waitSeconds === undefined ? 120 : Math.min(args.waitSeconds, MAX_WAIT_SECONDS)
+      const waitSeconds = args.waitSeconds === undefined ? DEFAULT_WAIT_SECONDS : Math.min(args.waitSeconds, MAX_WAIT_SECONDS)
       return runVideo({
         videoId: args.videoId,
         directory: await workspace(ctx, exec),
